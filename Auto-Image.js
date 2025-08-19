@@ -4,15 +4,21 @@
     TRANSPARENCY_THRESHOLD: 100,
     WHITE_THRESHOLD: 250,
     LOG_INTERVAL: 10,
+    RETRY_ATTEMPTS: 3,
+    RETRY_DELAY: 2000,
+    MIN_DELAY: 500,
+    MAX_DELAY: 2000,
+    STORAGE_KEY: 'wplace-autoimage-config',
     THEME: {
-      primary: '#000000',
-      secondary: '#111111',
-      accent: '#222222',
+      primary: '#1a1a1a',
+      secondary: '#2d2d2d',
+      accent: '#775ce3',
       text: '#ffffff',
-      highlight: '#775ce3',
-      success: '#00ff00',
-      error: '#ff0000',
-      warning: '#ffaa00'
+      highlight: '#a855f7',
+      success: '#10b981',
+      error: '#ef4444',
+      warning: '#f59e0b',
+      info: '#3b82f6'
     }
   };
 
@@ -49,7 +55,20 @@
       initMessage: "Clique em 'Iniciar Auto-BOT' para começar",
       waitingInit: "Aguardando inicialização...",
       resizeSuccess: "✅ Imagem redimensionada para {width}x{height}",
-      paintingPaused: "⏸️ Pintura pausada na posição X: {x}, Y: {y}"
+      paintingPaused: "⏸️ Pintura em pause na posição X: {x}, Y: {y}",
+      smartDelay: "Atraso Inteligente",
+      enableSound: "Ativar Som",
+      adaptiveMode: "Modo Adaptativo",
+      enableLogging: "Ativar Log",
+      settings: "Configurações",
+      pause: "Pausar",
+      resume: "Continuar",
+      statistics: "Estatísticas",
+      runtime: "Tempo Ativo",
+      pixelsPerHour: "Pixels/Hora",
+      successRate: "Taxa de Sucesso",
+      restartFromPosition: "Retomar da última posição",
+      resetPosition: "Resetar posição"
     },
     en: {
       title: "WPlace Auto-Image",
@@ -83,7 +102,20 @@
       initMessage: "Click 'Start Auto-BOT' to begin",
       waitingInit: "Waiting for initialization...",
       resizeSuccess: "✅ Image resized to {width}x{height}",
-      paintingPaused: "⏸️ Painting paused at position X: {x}, Y: {y}"
+      paintingPaused: "⏸️ Painting paused at position X: {x}, Y: {y}",
+      smartDelay: "Smart Delay",
+      enableSound: "Enable Sound",
+      adaptiveMode: "Adaptive Mode",
+      enableLogging: "Enable Logging",
+      settings: "Settings",
+      pause: "Pause",
+      resume: "Resume",
+      statistics: "Statistics",
+      runtime: "Runtime",
+      pixelsPerHour: "Pixels/Hour",
+      successRate: "Success Rate",
+      restartFromPosition: "Restart from last position",
+      resetPosition: "Reset position"
     },
     fr: {
       title: "WPlace Auto-Image",
@@ -225,10 +257,12 @@
 
   const state = {
     running: false,
+    paused: false,
     imageLoaded: false,
     processing: false,
     totalPixels: 0,
     paintedPixels: 0,
+    failedAttempts: 0,
     availableColors: [],
     currentCharges: 0,
     cooldown: CONFIG.COOLDOWN_DEFAULT,
@@ -241,7 +275,19 @@
     minimized: false,
     lastPosition: { x: 0, y: 0 },
     estimatedTime: 0,
-    language: 'en'
+    language: 'en',
+    statistics: {
+      startTime: null,
+      totalRuntime: 0,
+      pixelsPerHour: 0,
+      successRate: 0
+    },
+    settings: {
+      enableLogging: true,
+      enableSound: false,
+      smartDelay: true,
+      adaptiveMode: false
+    }
   };
 
   // Detects and sets the user's language
@@ -252,9 +298,11 @@
     }
   }
 
-  // Utility functions for performance and clarity
+  // Enhanced utility functions
   const Utils = {
     sleep: ms => new Promise(r => setTimeout(r, ms)),
+
+    random: (min, max) => Math.floor(Math.random() * (max - min + 1)) + min,
 
     // Euclidean color distance
     colorDistance: (a, b) => Math.sqrt(
@@ -263,6 +311,68 @@
       (a[2] - b[2]) ** 2
     ),
 
+    log: (message, type = 'info') => {
+      if (!state.settings.enableLogging) return;
+      const timestamp = new Date().toLocaleTimeString();
+      console.log(`[${timestamp}] [${type.toUpperCase()}] WPlace Auto-Image: ${message}`);
+    },
+
+    saveConfig: () => {
+      try {
+        localStorage.setItem(CONFIG.STORAGE_KEY, JSON.stringify({
+          lastPosition: state.lastPosition,
+          startPosition: state.startPosition,
+          region: state.region,
+          settings: state.settings,
+          language: state.language
+        }));
+        Utils.log('Configuration saved', 'info');
+      } catch (e) {
+        Utils.log('Failed to save config: ' + e.message, 'error');
+      }
+    },
+
+    loadConfig: () => {
+      try {
+        const saved = localStorage.getItem(CONFIG.STORAGE_KEY);
+        if (saved) {
+          const config = JSON.parse(saved);
+          if (config.lastPosition) state.lastPosition = config.lastPosition;
+          if (config.startPosition) state.startPosition = config.startPosition;
+          if (config.region) state.region = config.region;
+          if (config.settings) Object.assign(state.settings, config.settings);
+          if (config.language) state.language = config.language;
+          Utils.log('Configuration loaded', 'info');
+        }
+      } catch (e) {
+        Utils.log('Failed to load config: ' + e.message, 'error');
+      }
+    },
+
+    playSound: (type) => {
+      if (!state.settings.enableSound) return;
+      try {
+        const context = new (window.AudioContext || window.webkitAudioContext)();
+        const oscillator = context.createOscillator();
+        const gainNode = context.createGain();
+        
+        oscillator.connect(gainNode);
+        gainNode.connect(context.destination);
+        
+        const frequencies = { success: 800, error: 400, warning: 600 };
+        oscillator.frequency.value = frequencies[type] || 500;
+        oscillator.type = 'square';
+        
+        gainNode.gain.setValueAtTime(0.1, context.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, context.currentTime + 0.3);
+        
+        oscillator.start(context.currentTime);
+        oscillator.stop(context.currentTime + 0.3);
+      } catch (e) {
+        // Audio context not supported
+      }
+    },
+
     // Debounced DOM update for stats
     debounce(fn, delay = 100) {
       let timer;
@@ -270,6 +380,19 @@
         clearTimeout(timer);
         timer = setTimeout(() => fn(...args), delay);
       };
+    },
+
+    formatTime: ms => {
+      const seconds = Math.floor((ms / 1000) % 60);
+      const minutes = Math.floor((ms / (1000 * 60)) % 60);
+      const hours = Math.floor((ms / (1000 * 60 * 60)) % 24);
+      const days = Math.floor(ms / (1000 * 60 * 60 * 24));
+      let result = '';
+      if (days > 0) result += `${days}d `;
+      if (hours > 0 || days > 0) result += `${hours}h `;
+      if (minutes > 0 || hours > 0 || days > 0) result += `${minutes}m `;
+      result += `${seconds}s`;
+      return result;
     },
 
     createImageUploader: () => new Promise(resolve => {
@@ -328,13 +451,15 @@
       alert.style.padding = '15px 20px';
       alert.style.background = CONFIG.THEME[type] || CONFIG.THEME.accent;
       alert.style.color = CONFIG.THEME.text;
-      alert.style.borderRadius = '5px';
+      alert.style.borderRadius = '8px';
       alert.style.zIndex = '10000';
-      alert.style.boxShadow = '0 3px 10px rgba(0,0,0,0.3)';
+      alert.style.boxShadow = '0 8px 32px rgba(0,0,0,0.5)';
       alert.style.display = 'flex';
       alert.style.alignItems = 'center';
-      alert.style.gap = '10px';
-      alert.style.fontSize = '1rem';
+      alert.style.gap = '12px';
+      alert.style.fontSize = '14px';
+      alert.style.backdropFilter = 'blur(12px)';
+      alert.style.animation = 'slideIn 0.3s ease-out';
 
       const icons = {
         error: 'exclamation-circle',
@@ -349,12 +474,13 @@
       `;
 
       document.body.appendChild(alert);
+      Utils.playSound(type);
 
       setTimeout(() => {
         alert.style.opacity = '0';
         alert.style.transition = 'opacity 0.5s';
         setTimeout(() => alert.remove(), 500);
-      }, 3000);
+      }, 4000);
     },
 
     calculateEstimatedTime: (remainingPixels, currentCharges, cooldown) => {
@@ -378,33 +504,71 @@
     }
   };
 
+  // Enhanced WPlace API Service with retry logic
   const WPlaceService = {
+    async fetchWithRetry(url, options = {}, retries = CONFIG.RETRY_ATTEMPTS) {
+      for (let i = 0; i < retries; i++) {
+        try {
+          const res = await fetch(url, {
+            credentials: 'include',
+            timeout: 10000,
+            ...options
+          });
+          
+          if (!res.ok && res.status >= 500) {
+            throw new Error(`Server error: ${res.status}`);
+          }
+          
+          return await res.json();
+        } catch (e) {
+          Utils.log(`API request failed (attempt ${i + 1}/${retries}): ${e.message}`, 'warning');
+          
+          if (i === retries - 1) {
+            Utils.log(`All retry attempts failed for ${url}`, 'error');
+            return null;
+          }
+          
+          await Utils.sleep(CONFIG.RETRY_DELAY * (i + 1));
+        }
+      }
+    },
+
     async paintPixelInRegion(regionX, regionY, pixelX, pixelY, color) {
       try {
-        const res = await fetch(`https://backend.wplace.live/s0/pixel/${regionX}/${regionY}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
-          credentials: 'include',
-          body: JSON.stringify({ coords: [pixelX, pixelY], colors: [color] })
-        });
-        const data = await res.json();
-        return data?.painted === 1;
-      } catch {
+        const result = await this.fetchWithRetry(
+          `https://backend.wplace.live/s0/pixel/${regionX}/${regionY}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
+            body: JSON.stringify({ coords: [pixelX, pixelY], colors: [color] })
+          }
+        );
+        
+        if (result?.painted === 1) {
+          Utils.log(`Pixel painted at (${pixelX}, ${pixelY}) with color ${color}`, 'success');
+          return true;
+        } else {
+          Utils.log(`Failed to paint pixel at (${pixelX}, ${pixelY})`, 'warning');
+          return false;
+        }
+      } catch (error) {
+        Utils.log(`Paint pixel error: ${error.message}`, 'error');
         return false;
       }
     },
     
     async getCharges() {
       try {
-        const res = await fetch('https://b/>ackend.wplace.live/me', { 
-          credentials: 'include' 
-        });
-        const data = await res.json();
-        return { 
-          charges: data.charges?.count || 0, 
-          cooldown: data.charges?.cooldownMs || CONFIG.COOLDOWN_DEFAULT 
-        };
-      } catch {
+        const data = await this.fetchWithRetry('https://backend.wplace.live/me');
+        if (data) {
+          const charges = data.charges?.count || 0;
+          const cooldown = data.charges?.cooldownMs || CONFIG.COOLDOWN_DEFAULT;
+          Utils.log(`Charges updated: ${Math.floor(charges)}`, 'info');
+          return { charges: Math.floor(charges), cooldown };
+        }
+        return { charges: 0, cooldown: CONFIG.COOLDOWN_DEFAULT };
+      } catch (error) {
+        Utils.log(`Get charges error: ${error.message}`, 'error');
         return { charges: 0, cooldown: CONFIG.COOLDOWN_DEFAULT };
       }
     }
@@ -501,14 +665,14 @@
         position: fixed;
         top: 20px;
         right: 20px;
-        width: 340px;
-        background: rgba(20,20,20,0.7);
+        width: 360px;
+        background: ${CONFIG.THEME.primary};
         border: 1px solid ${CONFIG.THEME.accent};
         border-radius: 18px;
         padding: 0;
         box-shadow: 0 8px 32px rgba(0,0,0,0.7);
         z-index: 9998;
-        font-family: 'Segoe UI', Roboto, sans-serif;
+        font-family: 'Segoe UI', 'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif;
         color: ${CONFIG.THEME.text};
         animation: glassFade 0.7s, slideIn 0.4s ease-out;
         overflow: hidden;
@@ -524,8 +688,8 @@
       }
       .wplace-header {
         padding: 16px 18px;
-        background: rgba(30,30,30,0.8);
-        color: ${CONFIG.THEME.highlight};
+        background: linear-gradient(135deg, ${CONFIG.THEME.secondary}, ${CONFIG.THEME.accent});
+        color: ${CONFIG.THEME.text};
         font-size: 18px;
         font-weight: 700;
         display: flex;
@@ -545,19 +709,22 @@
         gap: 12px;
       }
       .wplace-header-btn {
-        background: none;
+        background: rgba(255,255,255,0.1);
         border: none;
         color: ${CONFIG.THEME.text};
         cursor: pointer;
-        opacity: 0.7;
-        transition: opacity 0.2s, transform 0.2s;
-        font-size: 1.2em;
+        padding: 6px 8px;
+        border-radius: 6px;
+        transition: all 0.2s;
+        opacity: 0.8;
+        font-size: 1.1em;
       }
       .wplace-header-btn:focus {
         outline: 2px solid ${CONFIG.THEME.highlight};
       }
       .wplace-header-btn:hover {
         opacity: 1;
+        background: rgba(255,255,255,0.2);
         transform: scale(1.15);
       }
       .wplace-content {
@@ -770,6 +937,55 @@
         opacity: 0;
         transition: opacity 0.2s;
       }
+      /* Settings panel styles */
+      .wplace-settings {
+        margin-top: 10px;
+        padding: 12px;
+        background: rgba(255,255,255,0.05);
+        border-radius: 8px;
+        border: 1px solid rgba(255,255,255,0.1);
+        display: none;
+      }
+      .wplace-setting-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 6px 0;
+        font-size: 12px;
+      }
+      .wplace-toggle {
+        position: relative;
+        width: 40px;
+        height: 20px;
+        background: rgba(255,255,255,0.2);
+        border-radius: 10px;
+        cursor: pointer;
+        transition: background 0.3s;
+      }
+      .wplace-toggle.active {
+        background: ${CONFIG.THEME.accent};
+      }
+      .wplace-toggle::after {
+        content: '';
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 16px;
+        height: 16px;
+        background: white;
+        border-radius: 50%;
+        transition: transform 0.3s;
+      }
+      .wplace-toggle.active::after {
+        transform: translateX(20px);
+      }
+      .wplace-btn-pause {
+        background: linear-gradient(90deg, ${CONFIG.THEME.warning} 60%, #d97706 100%);
+        color: white;
+      }
+      .wplace-minimized .wplace-content {
+        display: none;
+      }
     `;
     document.head.appendChild(style);
 
@@ -782,7 +998,10 @@
           <span>${Utils.t('title')}</span>
         </div>
         <div class="wplace-header-controls">
-          <button id="minimizeBtn" class="wplace-header-btn" title="${Utils.t('minimize')}">
+          <button id="settingsBtn" class="wplace-header-btn" title="${Utils.t('settings')}">
+            <i class="fas fa-cog"></i>
+          </button>
+          <button id="minimizeBtn" class="wplace-header-btn" title="Minimize">
             <i class="fas fa-minus"></i>
           </button>
         </div>
@@ -809,6 +1028,10 @@
             <i class="fas fa-play"></i>
             <span>${Utils.t('startPainting')}</span>
           </button>
+          <button id="pauseBtn" class="wplace-btn wplace-btn-pause" disabled style="display: none;">
+            <i class="fas fa-pause"></i>
+            <span>${Utils.t('pause')}</span>
+          </button>
           <button id="stopBtn" class="wplace-btn wplace-btn-stop" disabled>
             <i class="fas fa-stop"></i>
             <span>${Utils.t('stopPainting')}</span>
@@ -830,8 +1053,36 @@
         <div id="statusText" class="wplace-status status-default">
           ${Utils.t('waitingInit')}
         </div>
-      </div>
-    `;
+        
+        <div id="settingsPanel" class="wplace-settings">
+          <div class="wplace-setting-item">
+            <span>${Utils.t('smartDelay')}</span>
+            <div class="wplace-toggle ${state.settings.smartDelay ? 'active' : ''}" data-setting="smartDelay"></div>
+          </div>
+          <div class="wplace-setting-item">
+            <span>${Utils.t('enableSound')}</span>
+            <div class="wplace-toggle ${state.settings.enableSound ? 'active' : ''}" data-setting="enableSound"></div>
+          </div>
+          <div class="wplace-setting-item">
+            <span>${Utils.t('adaptiveMode')}</span>
+            <div class="wplace-toggle ${state.settings.adaptiveMode ? 'active' : ''}" data-setting="adaptiveMode"></div>
+          </div>
+          <div class="wplace-setting-item">
+            <span>${Utils.t('enableLogging')}</span>
+            <div class="wplace-toggle ${state.settings.enableLogging ? 'active' : ''}" data-setting="enableLogging"></div>
+          </div>
+          <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.1);">
+            <button id="restartBtn" class="wplace-btn wplace-btn-primary" style="width: 100%; margin-bottom: 8px;">
+              <i class="fas fa-play"></i>
+              <span>${Utils.t('restartFromPosition')}</span>
+            </button>
+            <button id="resetPosBtn" class="wplace-btn wplace-btn-upload" style="width: 100%;">
+              <i class="fas fa-undo"></i>
+              <span>${Utils.t('resetPosition')}</span>
+            </button>
+          </div>
+        </div>
+      </div>`;
     
     const resizeContainer = document.createElement('div');
     resizeContainer.className = 'resize-container';
@@ -942,7 +1193,7 @@
       statusText.style.animation = 'slideIn 0.3s ease-out';
     };
 
-    // Debounced stats update for performance
+    // Enhanced stats update with runtime tracking
     window.updateStats = Utils.debounce(async () => {
       if (!state.colorsChecked || !state.imageLoaded) return;
 
@@ -954,6 +1205,19 @@
         Math.round((state.paintedPixels / state.totalPixels) * 100) : 0;
       const remainingPixels = state.totalPixels - state.paintedPixels;
 
+      // Calculate runtime statistics
+      if (state.statistics.startTime) {
+        const now = Date.now();
+        const runtime = now - state.statistics.startTime;
+        state.statistics.totalRuntime = runtime;
+        
+        const hoursRunning = runtime / (1000 * 60 * 60);
+        state.statistics.pixelsPerHour = hoursRunning > 0 ? Math.round(state.paintedPixels / hoursRunning) : 0;
+        
+        const totalAttempts = state.paintedPixels + state.failedAttempts;
+        state.statistics.successRate = totalAttempts > 0 ? Math.round((state.paintedPixels / totalAttempts) * 100) : 0;
+      }
+
       state.estimatedTime = Utils.calculateEstimatedTime(
         remainingPixels,
         state.currentCharges,
@@ -962,24 +1226,38 @@
 
       progressBar.style.width = `${progress}%`;
 
-      // Only update DOM if changed
+      // Enhanced stats display
       const statsHTML = `
         <div class="wplace-stat-item">
           <div class="wplace-stat-label"><i class="fas fa-image"></i> ${Utils.t('progress')}</div>
-          <div>${progress}%</div>
+          <div class="wplace-stat-value">${progress}%</div>
         </div>
         <div class="wplace-stat-item">
           <div class="wplace-stat-label"><i class="fas fa-paint-brush"></i> ${Utils.t('pixels')}</div>
-          <div>${state.paintedPixels}/${state.totalPixels}</div>
+          <div class="wplace-stat-value">${state.paintedPixels}/${state.totalPixels}</div>
         </div>
         <div class="wplace-stat-item">
           <div class="wplace-stat-label"><i class="fas fa-bolt"></i> ${Utils.t('charges')}</div>
-          <div>${Math.floor(state.currentCharges)}</div>
+          <div class="wplace-stat-value">${Math.floor(state.currentCharges)}</div>
         </div>
+        ${state.statistics.startTime ? `
+        <div class="wplace-stat-item">
+          <div class="wplace-stat-label"><i class="fas fa-clock"></i> ${Utils.t('runtime')}</div>
+          <div class="wplace-stat-value">${Utils.formatTime(state.statistics.totalRuntime)}</div>
+        </div>
+        <div class="wplace-stat-item">
+          <div class="wplace-stat-label"><i class="fas fa-tachometer-alt"></i> ${Utils.t('pixelsPerHour')}</div>
+          <div class="wplace-stat-value">${state.statistics.pixelsPerHour}</div>
+        </div>
+        <div class="wplace-stat-item">
+          <div class="wplace-stat-label"><i class="fas fa-percentage"></i> ${Utils.t('successRate')}</div>
+          <div class="wplace-stat-value">${state.statistics.successRate}%</div>
+        </div>
+        ` : ''}
         ${state.imageLoaded ? `
         <div class="wplace-stat-item">
-          <div class="wplace-stat-label"><i class="fas fa-clock"></i> ${Utils.t('estimatedTime')}</div>
-          <div>${Utils.formatTime(state.estimatedTime)}</div>
+          <div class="wplace-stat-label"><i class="fas fa-hourglass-half"></i> ${Utils.t('estimatedTime')}</div>
+          <div class="wplace-stat-value">${Utils.formatTime(state.estimatedTime)}</div>
         </div>
         ` : ''}
       `;
@@ -1229,21 +1507,31 @@
       }
       
       state.running = true;
+      state.paused = false;
       state.stopFlag = false;
+      state.statistics.startTime = Date.now();
+      
       startBtn.disabled = true;
+      pauseBtn.disabled = false;
+      pauseBtn.style.display = 'block';
       stopBtn.disabled = false;
       uploadBtn.disabled = true;
       selectPosBtn.disabled = true;
       resizeBtn.disabled = true;
       
       updateUI('startPaintingMsg', 'success');
+      Utils.log('Image painting started', 'success');
       
       try {
         await processImage();
-      } catch {
+      } catch (error) {
+        Utils.log(`Painting error: ${error.message}`, 'error');
         updateUI('paintingError', 'error');
       } finally {
         state.running = false;
+        state.paused = false;
+        pauseBtn.disabled = true;
+        pauseBtn.style.display = 'none';
         stopBtn.disabled = true;
         
         if (!state.stopFlag) {
@@ -1254,7 +1542,75 @@
         } else {
           startBtn.disabled = false;
         }
+        
+        Utils.saveConfig();
       }
+    });
+
+    // Enhanced pause/resume functionality
+    const pauseBtn = document.querySelector('#pauseBtn');
+    pauseBtn.addEventListener('click', () => {
+      state.paused = !state.paused;
+      const t = Utils.t;
+      
+      if (state.paused) {
+        pauseBtn.innerHTML = `<i class="fas fa-play"></i> <span>${t('resume')}</span>`;
+        updateUI('paintingPaused', 'warning', { x: state.lastPosition.x, y: state.lastPosition.y });
+        Utils.log('Painting paused', 'info');
+      } else {
+        pauseBtn.innerHTML = `<i class="fas fa-pause"></i> <span>${t('pause')}</span>`;
+        updateUI('startPaintingMsg', 'success');
+        Utils.log('Painting resumed', 'info');
+      }
+      Utils.playSound(state.paused ? 'warning' : 'success');
+    });
+
+    // Settings panel functionality
+    const settingsBtn = document.querySelector('#settingsBtn');
+    const settingsPanel = document.querySelector('#settingsPanel');
+    
+    settingsBtn.addEventListener('click', () => {
+      const isVisible = settingsPanel.style.display !== 'none';
+      settingsPanel.style.display = isVisible ? 'none' : 'block';
+      settingsBtn.style.background = isVisible ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.2)';
+    });
+
+    // Settings toggles
+    document.querySelectorAll('.wplace-toggle').forEach(toggle => {
+      toggle.addEventListener('click', () => {
+        const setting = toggle.dataset.setting;
+        state.settings[setting] = !state.settings[setting];
+        toggle.classList.toggle('active', state.settings[setting]);
+        Utils.saveConfig();
+        Utils.log(`Setting ${setting} changed to ${state.settings[setting]}`, 'info');
+      });
+    });
+
+    // Restart from last position
+    const restartBtn = document.querySelector('#restartBtn');
+    restartBtn.addEventListener('click', () => {
+      if (state.lastPosition && (state.lastPosition.x > 0 || state.lastPosition.y > 0)) {
+        Utils.showAlert(`Resuming from position (${state.lastPosition.x}, ${state.lastPosition.y})`, 'info');
+        if (!state.running && state.imageLoaded && state.startPosition) {
+          startBtn.click();
+        }
+      } else {
+        Utils.showAlert('No saved position found', 'warning');
+      }
+    });
+
+    // Reset position
+    const resetPosBtn = document.querySelector('#resetPosBtn');
+    resetPosBtn.addEventListener('click', () => {
+      state.lastPosition = { x: 0, y: 0 };
+      state.paintedPixels = 0;
+      state.failedAttempts = 0;
+      state.statistics.startTime = null;
+      state.statistics.totalRuntime = 0;
+      Utils.saveConfig();
+      updateStats();
+      Utils.showAlert('Position and progress reset', 'success');
+      Utils.log('Position and progress reset', 'info');
     });
     
     stopBtn.addEventListener('click', () => {
@@ -1265,6 +1621,7 @@
     });
   }
 
+  // Enhanced image processing with pause/resume and smart delays
   async function processImage() {
     const { width, height, pixels } = state.imageData;
     const { x: startX, y: startY } = state.startPosition;
@@ -1273,12 +1630,21 @@
     let startRow = state.lastPosition.y || 0;
     let startCol = state.lastPosition.x || 0;
     
+    Utils.log(`Starting image processing from position (${startCol}, ${startRow})`, 'info');
+    
     outerLoop:
     for (let y = startRow; y < height; y++) {
       for (let x = (y === startRow ? startCol : 0); x < width; x++) {
-        if (state.stopFlag) {
+        // Handle pause state
+        while (state.paused && state.running) {
+          await Utils.sleep(1000);
+          continue;
+        }
+        
+        if (state.stopFlag || !state.running) {
           state.lastPosition = { x, y };
           updateUI('paintingPaused', 'warning', { x, y });
+          Utils.log(`Painting stopped at position (${x}, ${y})`, 'info');
           break outerLoop;
         }
         
@@ -1294,13 +1660,16 @@
         const rgb = [r, g, b];
         const colorId = findClosestColor(rgb, state.availableColors);
         
+        // Wait for charges if needed
         if (state.currentCharges < 1) {
           updateUI('noCharges', 'warning', { time: Utils.formatTime(state.cooldown) });
+          Utils.log(`No charges available, waiting ${Math.ceil(state.cooldown/1000)}s`, 'warning');
           await Utils.sleep(state.cooldown);
           
           const chargeUpdate = await WPlaceService.getCharges();
           state.currentCharges = chargeUpdate.charges;
           state.cooldown = chargeUpdate.cooldown;
+          continue;
         }
         
         const pixelX = startX + x;
@@ -1317,12 +1686,7 @@
         if (success) {
           state.paintedPixels++;
           state.currentCharges--;
-          
-          state.estimatedTime = Utils.calculateEstimatedTime(
-            state.totalPixels - state.paintedPixels,
-            state.currentCharges,
-            state.cooldown
-          );
+          Utils.playSound('success');
           
           if (state.paintedPixels % CONFIG.LOG_INTERVAL === 0) {
             updateStats();
@@ -1330,20 +1694,76 @@
               painted: state.paintedPixels, 
               total: state.totalPixels 
             });
+            Utils.log(`Progress: ${state.paintedPixels}/${state.totalPixels} pixels`, 'info');
           }
+        } else {
+          state.failedAttempts++;
+          Utils.log(`Failed to paint pixel at (${pixelX}, ${pixelY})`, 'warning');
+        }
+        
+        // Smart delay system
+        let delay = 100; // Base delay
+        if (state.settings.smartDelay) {
+          delay = Utils.random(CONFIG.MIN_DELAY, CONFIG.MAX_DELAY);
+        }
+        
+        // Adaptive delay based on success rate
+        if (state.settings.adaptiveMode && state.statistics.successRate < 70) {
+          delay *= 1.5;
+          Utils.log('Adaptive mode: increasing delay due to low success rate', 'info');
+        }
+        
+        await Utils.sleep(delay);
+        
+        // Update last position for resuming
+        state.lastPosition = { x: x + 1, y };
+        
+        // Periodic save
+        if (state.paintedPixels % 50 === 0) {
+          Utils.saveConfig();
         }
       }
     }
     
     if (state.stopFlag) {
       updateUI('paintingStopped', 'warning');
+      Utils.log('Painting stopped by user', 'info');
     } else {
       updateUI('paintingComplete', 'success', { count: state.paintedPixels });
+      Utils.log(`Painting completed! ${state.paintedPixels} pixels painted`, 'success');
+      Utils.playSound('success');
       state.lastPosition = { x: 0, y: 0 };
     }
     
     updateStats();
   }
 
-  createUI();
+  // Initialize the enhanced Auto-Image bot
+  try {
+    Utils.log('Initializing WPlace Auto-Image Pro', 'info');
+    
+    // Load saved configuration
+    Utils.loadConfig();
+    
+    // Detect user language if not already set
+    if (!state.language || state.language === 'en') {
+      detectLanguage();
+    }
+    
+    // Create the enhanced UI
+    await createUI();
+    
+    Utils.log('WPlace Auto-Image Pro initialized successfully', 'success');
+    
+    // Auto-save configuration periodically
+    setInterval(() => {
+      if (state.running || state.imageLoaded) {
+        Utils.saveConfig();
+      }
+    }, 30000); // Save every 30 seconds
+    
+  } catch (error) {
+    console.error('WPlace Auto-Image Pro initialization failed:', error);
+    Utils.log(`Initialization error: ${error.message}`, 'error');
+  }
 })();
