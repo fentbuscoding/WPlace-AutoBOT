@@ -244,23 +244,34 @@
     language: 'en'
   };
 
+  // Detects and sets the user's language
   function detectLanguage() {
-    const userLang = navigator.language.split('-')[0]
-
+    const userLang = navigator.language.split('-')[0];
     if (TEXTS[userLang]) {
       state.language = userLang;
     }
   }
 
+  // Utility functions for performance and clarity
   const Utils = {
     sleep: ms => new Promise(r => setTimeout(r, ms)),
-    
+
+    // Euclidean color distance
     colorDistance: (a, b) => Math.sqrt(
-      Math.pow(a[0] - b[0], 2) + 
-      Math.pow(a[1] - b[1], 2) + 
-      Math.pow(a[2] - b[2], 2)
+      (a[0] - b[0]) ** 2 +
+      (a[1] - b[1]) ** 2 +
+      (a[2] - b[2]) ** 2
     ),
-    
+
+    // Debounced DOM update for stats
+    debounce(fn, delay = 100) {
+      let timer;
+      return (...args) => {
+        clearTimeout(timer);
+        timer = setTimeout(() => fn(...args), delay);
+      };
+    },
+
     createImageUploader: () => new Promise(resolve => {
       const input = document.createElement('input');
       input.type = 'file';
@@ -272,8 +283,9 @@
       };
       input.click();
     }),
-    
+
     extractAvailableColors: () => {
+      // Query only once for performance
       const colorElements = document.querySelectorAll('[id^="color-"]');
       return Array.from(colorElements)
         .filter(el => !el.querySelector('svg'))
@@ -288,24 +300,27 @@
           return { id, rgb };
         });
     },
-    
+
     formatTime: ms => {
       const seconds = Math.floor((ms / 1000) % 60);
       const minutes = Math.floor((ms / (1000 * 60)) % 60);
       const hours = Math.floor((ms / (1000 * 60 * 60)) % 24);
       const days = Math.floor(ms / (1000 * 60 * 60 * 24));
-      
       let result = '';
       if (days > 0) result += `${days}d `;
       if (hours > 0 || days > 0) result += `${hours}h `;
       if (minutes > 0 || hours > 0 || days > 0) result += `${minutes}m `;
       result += `${seconds}s`;
-      
       return result;
     },
-    
+
     showAlert: (message, type = 'info') => {
-      const alert = document.createElement('div');
+      // Only one alert at a time for performance
+      let alert = document.getElementById('wplace-alert');
+      if (alert) alert.remove();
+      alert = document.createElement('div');
+      alert.id = 'wplace-alert';
+      alert.setAttribute('role', 'alert');
       alert.style.position = 'fixed';
       alert.style.top = '20px';
       alert.style.left = '50%';
@@ -319,40 +334,41 @@
       alert.style.display = 'flex';
       alert.style.alignItems = 'center';
       alert.style.gap = '10px';
-      
+      alert.style.fontSize = '1rem';
+
       const icons = {
         error: 'exclamation-circle',
         success: 'check-circle',
         warning: 'exclamation-triangle',
         info: 'info-circle'
       };
-      
+
       alert.innerHTML = `
         <i class="fas fa-${icons[type] || 'info-circle'}"></i>
         <span>${message}</span>
       `;
-      
+
       document.body.appendChild(alert);
-      
+
       setTimeout(() => {
         alert.style.opacity = '0';
         alert.style.transition = 'opacity 0.5s';
         setTimeout(() => alert.remove(), 500);
       }, 3000);
     },
-    
+
     calculateEstimatedTime: (remainingPixels, currentCharges, cooldown) => {
       const pixelsPerCharge = currentCharges > 0 ? currentCharges : 0;
       const fullCycles = Math.ceil((remainingPixels - pixelsPerCharge) / Math.max(currentCharges, 1));
       return (fullCycles * cooldown) + ((remainingPixels - 1) * 100);
     },
-    
+
     isWhitePixel: (r, g, b) => {
       return r >= CONFIG.WHITE_THRESHOLD && 
              g >= CONFIG.WHITE_THRESHOLD && 
              b >= CONFIG.WHITE_THRESHOLD;
     },
-    
+
     t: (key, params = {}) => {
       let text = TEXTS[state.language][key] || TEXTS.en[key] || key;
       for (const [k, v] of Object.entries(params)) {
@@ -380,7 +396,7 @@
     
     async getCharges() {
       try {
-        const res = await fetch('https://backend.wplace.live/me', { 
+        const res = await fetch('https://b/>ackend.wplace.live/me', { 
           credentials: 'include' 
         });
         const data = await res.json();
@@ -469,50 +485,64 @@
     const style = document.createElement('style');
     style.textContent = `
       @keyframes pulse {
-        0% { box-shadow: 0 0 0 0 rgba(0, 255, 0, 0.7); }
-        70% { box-shadow: 0 0 0 10px rgba(0, 255, 0, 0); }
-        100% { box-shadow: 0 0 0 0 rgba(0, 255, 0, 0); }
+        0% { box-shadow: 0 0 0 0 rgba(119, 92, 227, 0.7); }
+        70% { box-shadow: 0 0 0 15px rgba(119, 92, 227, 0); }
+        100% { box-shadow: 0 0 0 0 rgba(119, 92, 227, 0); }
       }
       @keyframes slideIn {
         from { transform: translateY(20px); opacity: 0; }
         to { transform: translateY(0); opacity: 1; }
       }
+      @keyframes glassFade {
+        from { backdrop-filter: blur(0px); }
+        to { backdrop-filter: blur(12px); }
+      }
       #wplace-image-bot-container {
         position: fixed;
         top: 20px;
         right: 20px;
-        width: 300px;
-        background: ${CONFIG.THEME.primary};
+        width: 340px;
+        background: rgba(20,20,20,0.7);
         border: 1px solid ${CONFIG.THEME.accent};
-        border-radius: 8px;
+        border-radius: 18px;
         padding: 0;
-        box-shadow: 0 5px 15px rgba(0,0,0,0.5);
+        box-shadow: 0 8px 32px rgba(0,0,0,0.7);
         z-index: 9998;
         font-family: 'Segoe UI', Roboto, sans-serif;
         color: ${CONFIG.THEME.text};
-        animation: slideIn 0.4s ease-out;
+        animation: glassFade 0.7s, slideIn 0.4s ease-out;
         overflow: hidden;
+        backdrop-filter: blur(12px);
+        transition: width 0.3s, box-shadow 0.3s;
+      }
+      @media (max-width: 500px) {
+        #wplace-image-bot-container {
+          width: 98vw;
+          right: 1vw;
+          top: 1vw;
+        }
       }
       .wplace-header {
-        padding: 12px 15px;
-        background: ${CONFIG.THEME.secondary};
+        padding: 16px 18px;
+        background: rgba(30,30,30,0.8);
         color: ${CONFIG.THEME.highlight};
-        font-size: 16px;
-        font-weight: 600;
+        font-size: 18px;
+        font-weight: 700;
         display: flex;
         justify-content: space-between;
         align-items: center;
         cursor: move;
         user-select: none;
+        border-bottom: 1px solid ${CONFIG.THEME.accent};
       }
       .wplace-header-title {
         display: flex;
         align-items: center;
-        gap: 8px;
+        gap: 10px;
       }
       .wplace-header-controls {
         display: flex;
-        gap: 10px;
+        gap: 12px;
       }
       .wplace-header-btn {
         background: none;
@@ -520,55 +550,66 @@
         color: ${CONFIG.THEME.text};
         cursor: pointer;
         opacity: 0.7;
-        transition: opacity 0.2s;
+        transition: opacity 0.2s, transform 0.2s;
+        font-size: 1.2em;
+      }
+      .wplace-header-btn:focus {
+        outline: 2px solid ${CONFIG.THEME.highlight};
       }
       .wplace-header-btn:hover {
         opacity: 1;
+        transform: scale(1.15);
       }
       .wplace-content {
-        padding: 15px;
+        padding: 18px;
         display: block;
       }
       .wplace-controls {
         display: flex;
         flex-direction: column;
-        gap: 10px;
-        margin-bottom: 15px;
+        gap: 12px;
+        margin-bottom: 18px;
       }
       .wplace-btn {
-        padding: 10px;
+        padding: 12px;
         border: none;
-        border-radius: 6px;
-        font-weight: 600;
+        border-radius: 8px;
+        font-weight: 700;
         cursor: pointer;
         display: flex;
         align-items: center;
         justify-content: center;
-        gap: 8px;
+        gap: 10px;
         transition: all 0.2s;
+        box-shadow: 0 2px 8px rgba(119,92,227,0.08);
+        position: relative;
+      }
+      .wplace-btn:focus {
+        outline: 2px solid ${CONFIG.THEME.highlight};
       }
       .wplace-btn:hover {
-        transform: translateY(-2px);
+        transform: translateY(-2px) scale(1.03);
+        box-shadow: 0 4px 16px rgba(119,92,227,0.15);
       }
       .wplace-btn-primary {
-        background: ${CONFIG.THEME.accent};
+        background: linear-gradient(90deg, ${CONFIG.THEME.accent} 60%, ${CONFIG.THEME.highlight} 100%);
         color: white;
       }
       .wplace-btn-upload {
-        background: ${CONFIG.THEME.secondary};
+        background: rgba(40,40,40,0.8);
         color: white;
         border: 1px dashed ${CONFIG.THEME.text};
       }
       .wplace-btn-start {
-        background: ${CONFIG.THEME.success};
+        background: linear-gradient(90deg, ${CONFIG.THEME.success} 60%, ${CONFIG.THEME.highlight} 100%);
         color: white;
       }
       .wplace-btn-stop {
-        background: ${CONFIG.THEME.error};
+        background: linear-gradient(90deg, ${CONFIG.THEME.error} 60%, ${CONFIG.THEME.highlight} 100%);
         color: white;
       }
       .wplace-btn-select {
-        background: ${CONFIG.THEME.highlight};
+        background: linear-gradient(90deg, ${CONFIG.THEME.highlight} 60%, ${CONFIG.THEME.accent} 100%);
         color: black;
       }
       .wplace-btn:disabled {
@@ -576,55 +617,76 @@
         cursor: not-allowed;
         transform: none !important;
       }
+      .wplace-btn .spinner {
+        width: 18px;
+        height: 18px;
+        border: 3px solid #fff;
+        border-top: 3px solid ${CONFIG.THEME.highlight};
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+        margin-right: 6px;
+      }
+      @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
       .wplace-stats {
-        background: ${CONFIG.THEME.secondary};
-        padding: 12px;
-        border-radius: 6px;
-        margin-bottom: 15px;
+        background: rgba(30,30,30,0.8);
+        padding: 14px;
+        border-radius: 8px;
+        margin-bottom: 18px;
+        box-shadow: 0 2px 8px rgba(119,92,227,0.08);
       }
       .wplace-stat-item {
         display: flex;
         justify-content: space-between;
-        padding: 6px 0;
-        font-size: 14px;
+        padding: 7px 0;
+        font-size: 15px;
       }
       .wplace-stat-label {
         display: flex;
         align-items: center;
-        gap: 6px;
-        opacity: 0.8;
+        gap: 8px;
+        opacity: 0.85;
       }
       .wplace-progress {
         width: 100%;
-        background: ${CONFIG.THEME.secondary};
-        border-radius: 4px;
-        margin: 10px 0;
+        background: rgba(40,40,40,0.8);
+        border-radius: 6px;
+        margin: 12px 0;
         overflow: hidden;
+        box-shadow: 0 1px 4px rgba(119,92,227,0.08);
       }
       .wplace-progress-bar {
-        height: 10px;
-        background: ${CONFIG.THEME.highlight};
-        transition: width 0.3s;
+        height: 12px;
+        background: linear-gradient(90deg, ${CONFIG.THEME.highlight} 60%, ${CONFIG.THEME.accent} 100%);
+        transition: width 0.4s cubic-bezier(.4,2,.3,1);
       }
       .wplace-status {
-        padding: 8px;
-        border-radius: 4px;
+        padding: 10px;
+        border-radius: 6px;
         text-align: center;
-        font-size: 13px;
+        font-size: 15px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        min-height: 32px;
+        transition: background 0.3s, color 0.3s;
       }
       .status-default {
-        background: rgba(255,255,255,0.1);
+        background: rgba(255,255,255,0.08);
       }
       .status-success {
-        background: rgba(0, 255, 0, 0.1);
+        background: rgba(0, 255, 0, 0.12);
         color: ${CONFIG.THEME.success};
       }
       .status-error {
-        background: rgba(255, 0, 0, 0.1);
+        background: rgba(255, 0, 0, 0.12);
         color: ${CONFIG.THEME.error};
       }
       .status-warning {
-        background: rgba(255, 165, 0, 0.1);
+        background: rgba(255, 165, 0, 0.12);
         color: orange;
       }
       #paintEffect {
@@ -637,11 +699,11 @@
         border-radius: 8px;
       }
       .position-info {
-        font-size: 13px;
-        margin-top: 5px;
-        padding: 5px;
-        background: ${CONFIG.THEME.secondary};
-        border-radius: 4px;
+        font-size: 14px;
+        margin-top: 7px;
+        padding: 7px;
+        background: rgba(30,30,30,0.8);
+        border-radius: 6px;
         text-align: center;
       }
       .wplace-minimized .wplace-content {
@@ -653,33 +715,36 @@
         top: 50%;
         left: 50%;
         transform: translate(-50%, -50%);
-        background: ${CONFIG.THEME.primary};
-        padding: 20px;
-        border-radius: 8px;
+        background: rgba(20,20,20,0.9);
+        padding: 24px;
+        border-radius: 14px;
         z-index: 10000;
-        box-shadow: 0 0 20px rgba(0,0,0,0.5);
-        max-width: 90%;
-        max-height: 90%;
+        box-shadow: 0 0 32px rgba(0,0,0,0.7);
+        max-width: 95vw;
+        max-height: 95vh;
         overflow: auto;
+        backdrop-filter: blur(8px);
       }
       .resize-preview {
         max-width: 100%;
-        max-height: 300px;
-        margin: 10px 0;
-        border: 1px solid ${CONFIG.THEME.accent};
+        max-height: 320px;
+        margin: 12px 0;
+        border: 2px solid ${CONFIG.THEME.accent};
+        border-radius: 8px;
+        box-shadow: 0 1px 8px rgba(119,92,227,0.08);
       }
       .resize-controls {
         display: flex;
         flex-direction: column;
-        gap: 10px;
-        margin-top: 15px;
+        gap: 12px;
+        margin-top: 18px;
       }
       .resize-slider {
         width: 100%;
       }
       .resize-buttons {
         display: flex;
-        gap: 10px;
+        gap: 12px;
       }
       .resize-overlay {
         position: fixed;
@@ -690,6 +755,20 @@
         background: rgba(0,0,0,0.7);
         z-index: 9999;
         display: none;
+      }
+      /* Tooltip styles */
+      .wplace-tooltip {
+        position: absolute;
+        background: rgba(30,30,30,0.95);
+        color: #fff;
+        padding: 6px 12px;
+        border-radius: 6px;
+        font-size: 13px;
+        z-index: 10001;
+        box-shadow: 0 2px 8px rgba(119,92,227,0.12);
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 0.2s;
       }
     `;
     document.head.appendChild(style);
@@ -863,26 +942,28 @@
       statusText.style.animation = 'slideIn 0.3s ease-out';
     };
 
-    window.updateStats = async () => {
+    // Debounced stats update for performance
+    window.updateStats = Utils.debounce(async () => {
       if (!state.colorsChecked || !state.imageLoaded) return;
-      
+
       const { charges, cooldown } = await WPlaceService.getCharges();
       state.currentCharges = Math.floor(charges);
       state.cooldown = cooldown;
-      
-      const progress = state.totalPixels > 0 ? 
+
+      const progress = state.totalPixels > 0 ?
         Math.round((state.paintedPixels / state.totalPixels) * 100) : 0;
       const remainingPixels = state.totalPixels - state.paintedPixels;
-      
+
       state.estimatedTime = Utils.calculateEstimatedTime(
-        remainingPixels, 
-        state.currentCharges, 
+        remainingPixels,
+        state.currentCharges,
         state.cooldown
       );
-      
+
       progressBar.style.width = `${progress}%`;
-      
-      statsArea.innerHTML = `
+
+      // Only update DOM if changed
+      const statsHTML = `
         <div class="wplace-stat-item">
           <div class="wplace-stat-label"><i class="fas fa-image"></i> ${Utils.t('progress')}</div>
           <div>${progress}%</div>
@@ -902,7 +983,8 @@
         </div>
         ` : ''}
       `;
-    };
+      if (statsArea.innerHTML !== statsHTML) statsArea.innerHTML = statsHTML;
+    }, 150);
     
     function showResizeDialog(processor) {
       const { width, height } = processor.getDimensions();
